@@ -3,9 +3,9 @@
 //  nte_swift_fisher
 //
 //  Loads the reference screenshots from the project's `screens/` folder so we
-//  can calibrate regions and validate detection OFFLINE — no running game
-//  required. The path is hard-coded to the dev machine on purpose: this is a
-//  personal tool and the fixtures are too large (10MB+ each) to bundle.
+//  can calibrate regions and validate detection OFFLINE, no running game
+//  required. The folder is derived from the current user's home dir (it is a dev
+//  convenience and the fixtures are too large, 10MB+ each, to bundle or commit).
 //
 //  Note: fixture PNGs include the macOS window chrome AND the drop-shadow
 //  border, so their content insets differ from a live SCStream capture (which
@@ -17,7 +17,11 @@ import AppKit
 import CoreGraphics
 
 enum FixtureLoader {
-    static let directory = "/Users/b.rannow/Documents/xcode/nte_swift_fisher/screens"
+    static var directory: String {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Documents/xcode/nte_swift_fisher/screens")
+            .path
+    }
 
     /// Filenames of available `.png` fixtures, sorted.
     static func available() -> [String] {
