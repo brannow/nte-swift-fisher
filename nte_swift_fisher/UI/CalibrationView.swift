@@ -71,16 +71,16 @@ struct CalibrationView: View {
     /// Give up waiting for a bite after this long and recast (borrowed default).
     @AppStorage("biteTimeoutSecs") private var biteTimeoutSecs: Double = 45
     /// Tap-hold JITTER range (ms) for F/Esc — sampled per press. UE5 drops ≤50ms;
-    /// 70–90 is safe. a/d is separate (InputController.dirMinHoldMs), tuned in M3.
+    /// 70–90 is safe. a/d control is separate: deterministic + non-blocking.
     @AppStorage("holdMinMs") private var holdMinMs: Int = 70
     @AppStorage("holdMaxMs") private var holdMaxMs: Int = 90
 
     // M3 minigame control (read by the engine at start()).
     @AppStorage("invertControl") private var invertControl = false
     @AppStorage("deadzoneFrac") private var controlDeadzone: Double = 0.5
-    @AppStorage("fineZoneFrac") private var fineZone: Double = 1.3
-    @AppStorage("fineTapMs") private var fineTapMs: Int = 60
-    @AppStorage("controlPollMs") private var controlPollMs: Int = 60
+    @AppStorage("lookaheadSecs") private var lookaheadSecs: Double = 0.12
+    @AppStorage("velAlpha") private var velAlpha: Double = 0.5
+    @AppStorage("controlPollMs") private var controlPollMs: Int = 33
     @AppStorage("maxStruggleSecs") private var maxStruggleSecs: Double = 120
     @AppStorage("rewardSettleSecs") private var rewardSettleSecs: Double = 4
 
@@ -626,7 +626,7 @@ struct CalibrationView: View {
                 Text("invert a/d (flip if it steers wrong)").font(.caption)
             }
             .toggleStyle(.switch).controlSize(.small)
-            Text("Zones are × the band half-width (band size varies per fish): rest ≤ deadzone, tap ≤ fineZone, hold beyond. Tap ms ≥ ~60 to register (game drops shorter).")
+            Text("Predictive tracking: the marker is steered toward where the bubble WILL be (centre + velocity × lookahead), resting once inside (deadband × half-band; band size varies per fish). Lookahead ≈ loop latency cancels the chase lag; velocity smoothing tames marker jitter.")
                 .font(.caption2).foregroundStyle(.secondary)
             HStack(spacing: 6) {
                 Text("rest ×band").font(.caption).foregroundStyle(.secondary)
@@ -636,23 +636,23 @@ struct CalibrationView: View {
                 }
             }
             HStack(spacing: 6) {
-                Text("tap ×band").font(.caption).foregroundStyle(.secondary)
+                Text("lookahead").font(.caption).foregroundStyle(.secondary)
                 Spacer()
-                Stepper(value: $fineZone, in: 0.5...3, step: 0.1) {
-                    Text(String(format: "%.1f", fineZone)).font(.caption.monospaced())
+                Stepper(value: $lookaheadSecs, in: 0...0.4, step: 0.01) {
+                    Text(String(format: "%.0f ms", lookaheadSecs * 1000)).font(.caption.monospaced())
                 }
             }
             HStack(spacing: 6) {
-                Text("fine tap").font(.caption).foregroundStyle(.secondary)
+                Text("vel smoothing").font(.caption).foregroundStyle(.secondary)
                 Spacer()
-                Stepper(value: $fineTapMs, in: 20...150, step: 5) {
-                    Text("\(fineTapMs) ms").font(.caption.monospaced())
+                Stepper(value: $velAlpha, in: 0.1...1, step: 0.05) {
+                    Text(String(format: "%.2f", velAlpha)).font(.caption.monospaced())
                 }
             }
             HStack(spacing: 6) {
                 Text("control poll").font(.caption).foregroundStyle(.secondary)
                 Spacer()
-                Stepper(value: $controlPollMs, in: 30...200, step: 10) {
+                Stepper(value: $controlPollMs, in: 16...200, step: 1) {
                     Text("\(controlPollMs) ms").font(.caption.monospaced())
                 }
             }

@@ -168,13 +168,18 @@ final class FishingBot: ObservableObject {
             }
             guard hooked else { continue }   // timed out → seek IDLE + recast
 
-            // 3) MINIGAME — steer a/d to keep the yellow marker in the green band,
-            //    until the bar disappears (win or fail). Bang-bang with a deadzone:
-            //    marker left of centre ⇒ push right, right ⇒ push left, in the
-            //    deadzone ⇒ release. The a/d↔direction mapping is unverified, so
-            //    `invertControl` flips it live if it steers the wrong way.
+            // 3) MINIGAME — steer a/d to keep the yellow marker inside the moving
+            //    green bubble until the bar disappears (win or fail). The bubble is
+            //    a MOVING target, so MinigameTracker predicts where it's heading and
+            //    aims there, resting once safely contained (see that file). A fresh
+            //    tracker per round so last round's velocity estimate can't leak in.
             state = .minigame
             input.releaseAll()
+            let tracker = MinigameTracker()
+            let tuning = MinigameTracker.Tuning(lookaheadSecs: cfg.lookaheadSecs,
+                                                velAlpha: cfg.velAlpha,
+                                                deadzoneFrac: cfg.deadzone,
+                                                invert: cfg.invertControl)
             let mgStart = Date()
             var lost = 0
             while running && !Task.isCancelled {
@@ -186,45 +191,37 @@ final class FishingBot: ObservableObject {
 
                 if Date().timeIntervalSince(mgStart) > cfg.maxStruggleSecs {
                     status = "minigame > \(Int(cfg.maxStruggleSecs))s — abort"
-                    await input.setDirection(nil); break
+                    input.setDirection(nil); break
                 }
                 guard let band = r?.greenBand else {
                     // Bar (maybe briefly) gone — debounce before declaring it ended.
-                    await input.setDirection(nil)
+                    input.setDirection(nil)
                     lost += 1
                     if lost >= 3 { break }
                     try? await Task.sleep(for: .milliseconds(UInt64(cfg.controlPollMs))); continue
                 }
                 lost = 0
 
-                if let m = r?.marker {
-                    let center = (band.lowerBound + band.upperBound) / 2
-                    // Half-band width — the band size varies per fish, so the
-                    // control zones scale with it (auto-adapts each round).
-                    let hb = max((band.upperBound - band.lowerBound) / 2, 0.02)
-                    let error = m - center
-                    let ae = abs(error)
-                    var right = error < 0              // marker left of centre ⇒ push right
-                    if cfg.invertControl { right.toggle() }
-                    let dir: Direction = right ? .right : .left
-                    let e = String(format: "%+.2f", error)
-                    // 3-zone control, zones as fractions of the half-band: REST
-                    // inside (no wobble when the band sits still), brief TAPs near
-                    // the edge (no overshoot), continuous HOLD when well outside
-                    // (chase a fast-moving band).
-                    if ae <= cfg.deadzone * hb {
-                        await input.setDirection(nil)
-                        status = "minigame: rest (err \(e))"
-                    } else if ae <= cfg.fineZone * hb {
-                        await input.pulse(dir, ms: UInt64(cfg.fineTapMs))
-                        status = "minigame: tap \(right ? "D" : "A") (err \(e))"
-                    } else {
-                        await input.setDirection(dir)
-                        status = "minigame: hold \(right ? "D" : "A") (err \(e))"
-                    }
-                } else {
-                    await input.setDirection(nil)      // marker not found — don't flail
+                guard let m = r?.marker else {
+                    input.setDirection(nil)            // marker not found — don't flail
+                    try? await Task.sleep(for: .milliseconds(UInt64(cfg.controlPollMs))); continue
                 }
+
+                let center = (band.lowerBound + band.upperBound) / 2
+                // Half-band width — bubble size varies per fish, so the deadband
+                // scales with it (auto-adapts each round).
+                let hb = max((band.upperBound - band.lowerBound) / 2, 0.02)
+                let now = Date().timeIntervalSinceReferenceDate
+                let d = tracker.step(now: now, center: center, marker: m,
+                                     halfBand: hb, tuning: tuning)
+                input.setDirection(d.direction)
+
+                let act = d.direction.map { $0 == .right ? "D" : "A" } ?? "rest"
+                status = String(format: "minigame: %@ (e%+.3f v%+.2f)", act, d.error, d.velocity)
+                // Per-tick instrumentation: with these we can identify the marker
+                // plant + true loop latency from a few rounds, and tune lookahead.
+                Log.msg(String(format: "🎯 dt=%4.0fms m=%.3f c=%.3f v=%+.3f pc=%.3f e=%+.3f → %@",
+                               d.dtMs, d.marker, d.center, d.velocity, d.predicted, d.error, act))
                 try? await Task.sleep(for: .milliseconds(UInt64(cfg.controlPollMs)))
             }
             input.releaseAll()
@@ -311,12 +308,15 @@ struct Config {
     var spamMs: Int
     var biteTimeoutSecs: Double
     var holdRange: ClosedRange<UInt64>
-    // M3 minigame control
+    // M3 minigame control (predictive tracking — see MinigameTracker)
     var controlPollMs: Int
+    /// Rest when |marker − predicted bubble centre| ≤ this × half-band.
     var deadzone: Double
-    /// |error| within this (but outside deadzone) ⇒ brief TAPs; beyond ⇒ hold.
-    var fineZone: Double
-    var fineTapMs: Int
+    /// Predict the bubble this far ahead (seconds) to cancel tracking lag +
+    /// sense→act dead time. ≈ the measured loop latency.
+    var lookaheadSecs: Double
+    /// EMA weight (0…1) on the freshest bubble-velocity sample.
+    var velAlpha: Double
     var invertControl: Bool
     var maxStruggleSecs: Double
     var rewardSettleSecs: Double
@@ -359,10 +359,10 @@ struct Config {
             spamMs: int("spamIntervalMs", 400),
             biteTimeoutSecs: dbl("biteTimeoutSecs", 45),
             holdRange: UInt64(Swift.min(hMin, hMax))...UInt64(Swift.max(hMin, hMax)),
-            controlPollMs: int("controlPollMs", 60),
+            controlPollMs: int("controlPollMs", 33),
             deadzone: dbl("deadzoneFrac", 0.5),     // × half-band
-            fineZone: dbl("fineZoneFrac", 1.3),     // × half-band
-            fineTapMs: int("fineTapMs", 60),
+            lookaheadSecs: dbl("lookaheadSecs", 0.12),
+            velAlpha: dbl("velAlpha", 0.5),
             invertControl: d.bool(forKey: "invertControl"),
             maxStruggleSecs: dbl("maxStruggleSecs", 120),
             rewardSettleSecs: dbl("rewardSettleSecs", 4),

@@ -5,10 +5,14 @@
 //  Synthesises keyboard input for the game. Keyboard-only: f / a / d / esc.
 //
 //  Two hard rules from testing the real game:
-//   • Every press must be held ≥60ms — taps ≤50ms get dropped. Discrete taps
-//     (F/Esc) hold a RANDOM duration in `tapHoldMs` (default 70–90ms) so our
-//     cadence isn't a fixed fingerprint. The a/d minigame floor is separate
-//     (`dirMinHoldMs`): control wants a predictable floor, not jitter.
+//   • Discrete taps (F/Esc) hold a RANDOM duration in `tapHoldMs` (default
+//     70–90ms) so our cadence isn't a fixed fingerprint, and because the game
+//     drops very short taps. The a/d minigame control is DIFFERENT: it is
+//     deterministic and NON-BLOCKING (no jitter, no min-hold sleep) — the
+//     tracker re-decides every control tick and snappiness depends on never
+//     stalling the loop. A short-press floor was REMOVED: it was inherited from
+//     a different mechanic and is unverified for a/d; if live logs show short
+//     presses getting dropped, reintroduce it as a NON-blocking timestamp guard.
 //   • During the minigame only ONE of a/d is held at a time; we always release
 //     the current direction before pressing the other.
 //
@@ -50,12 +54,6 @@ final class InputController: ObservableObject {
     /// the cadence isn't a fixed fingerprint. UE5 drops ≤50ms; 70–90 sits safely
     /// above. Tunable live from the overlay.
     var tapHoldMs: ClosedRange<UInt64> = 70...90
-
-    /// Minimum hold (ms) before a minigame direction (a/d) switch is allowed.
-    /// SEPARATE from tap jitter on purpose: direction control wants a predictable
-    /// floor that prevents a same-tick reversal from being dropped, not human-like
-    /// randomness. Tuned in M3.
-    var dirMinHoldMs: UInt64 = 70
 
     private let source = CGEventSource(stateID: .hidSystemState)
     private(set) var heldDirection: Direction?
@@ -105,8 +103,11 @@ final class InputController: ObservableObject {
     // MARK: - Minigame direction control (mutual exclusion)
 
     /// Set the held direction (or nil to release). Guarantees only one of a/d is
-    /// down and that each press lasts ≥ minHoldMs before it can be switched.
-    func setDirection(_ dir: Direction?) async {
+    /// down. Synchronous and NON-BLOCKING by design: the minigame control loop
+    /// re-decides every tick and must never stall here — a same-tick reversal is
+    /// just keyUp(old)+keyDown(new) with no sleep. (See header on the removed
+    /// short-press floor.)
+    func setDirection(_ dir: Direction?) {
         guard dir != heldDirection else { return }
         // Release whatever is currently held.
         if let current = heldDirection {
@@ -116,20 +117,6 @@ final class InputController: ObservableObject {
         guard let dir else { return }
         keyDown(key(for: dir).code)
         heldDirection = dir
-        // Enforce the minimum hold so a same-tick reversal can't drop the press.
-        try? await Task.sleep(for: .milliseconds(dirMinHoldMs))
-    }
-
-    /// Brief directional TAP for FINE minigame corrections (vs the sustained
-    /// `setDirection` hold that covers distance). Releases any held direction
-    /// first. NOTE: the game drops presses ≤~50ms, so `ms` below that may not
-    /// register — the finer control lever is the cadence between taps, not `ms`.
-    func pulse(_ dir: Direction, ms: UInt64) async {
-        releaseAll()
-        let code = key(for: dir).code
-        keyDown(code)
-        try? await Task.sleep(for: .milliseconds(ms))
-        keyUp(code)
     }
 
     /// Release any held direction (e.g. when the minigame ends).
