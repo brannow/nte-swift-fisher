@@ -11,8 +11,7 @@ import SwiftUI
 struct nte_swift_fisherApp: App {
     var body: some Scene {
         WindowGroup {
-            CalibrationView()
-                .frame(minWidth: 900, minHeight: 600)
+            ContentView()
         }
         .windowResizability(.contentMinSize)
     }

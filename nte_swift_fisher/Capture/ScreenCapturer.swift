@@ -130,10 +130,10 @@ final class ScreenCapturer: ObservableObject {
 
                 let filter = SCContentFilter(desktopIndependentWindow: window)
                 let handler = FrameHandler { [weak self] box in
-                    Task { @MainActor in self?.ingest(box) }
+                    Task { @MainActor [weak self] in self?.ingest(box) }
                 }
                 let delegate = StreamDelegate { [weak self] error in
-                    Task { @MainActor in self?.handleStreamStopped(error) }
+                    Task { @MainActor [weak self] in self?.handleStreamStopped(error) }
                 }
                 let stream = SCStream(filter: filter, configuration: config, delegate: delegate)
                 try stream.addStreamOutput(handler, type: .screen, sampleHandlerQueue: outputQueue)
@@ -216,16 +216,16 @@ final class ScreenCapturer: ObservableObject {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(1.0))
                 guard let self else { return }
-                guard await self.shouldCapture else { continue }
+                guard self.shouldCapture else { continue }
                 guard let window = try? await WindowLocator.findNTE() else { continue }
-                let old = await self.windowFramePoints
-                let running = await self.isRunning
+                let old = self.windowFramePoints
+                let running = self.isRunning
                 let f = window.frame
                 let changed = abs(f.width - old.width) > 2 || abs(f.height - old.height) > 2
                     || abs(f.minX - old.minX) > 2 || abs(f.minY - old.minY) > 2
                 // Watchdog: a stream can freeze silently (no error). If we're
                 // "running" but no frame has arrived recently, treat it as dead.
-                let last = await self.lastFrameAt
+                let last = self.lastFrameAt
                 let stale = running && Date().timeIntervalSince(last) > 2.5
                 if !running || changed || stale {
                     await self.attemptStart(window: window)

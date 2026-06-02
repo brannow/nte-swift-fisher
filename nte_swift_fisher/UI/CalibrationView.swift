@@ -18,7 +18,12 @@ enum CaptureMode: String, CaseIterable, Identifiable {
 }
 
 struct CalibrationView: View {
-    @StateObject private var capturer = ScreenCapturer()
+    /// Shared orchestrator + capture stream (owned by ContentView).
+    @ObservedObject var bot: FishingBot
+    @ObservedObject var capturer: ScreenCapturer
+    /// True only while this tab is the visible one. When false we skip ALL the
+    /// heavy per-frame detection/visualisation (single choke point: displayImage).
+    var isActive: Bool = true
 
     @State private var mode: CaptureMode = .fixture
     @State private var fixtureName: String = ""
@@ -32,9 +37,77 @@ struct CalibrationView: View {
     /// bar vs fullscreen vs shadow border width).
     @AppStorage("fixtureInsets") private var fixtureInsets = FixtureInsetMap()
 
+    // Detection (M1) — glyph TEMPLATE matching (background-independent). Capture
+    // the E/F glyphs once, then IDLE = eButton NCC score over threshold. Templates
+    // + threshold persist across relaunches.
+    @AppStorage("eTemplate") private var eTemplate = GlyphTemplate()
+    @AppStorage("idleMatchThreshold") private var idleMatchThreshold: Double = 0.55
+    /// Min eButton brightness to count as IDLE — rejects the dimmed E behind the
+    /// loot overlay (NCC alone matches the blurred glyph). 0 = gate off.
+    @AppStorage("idleMinBright") private var idleMinBright: Double = 0
+
+    // Detection (M3) — MINIGAME bar read as a 1-D signal: green TARGET band +
+    // yellow MARKER. greenBand present ⇒ minigame active ⇒ also the "we hooked it"
+    // signal for spam-F. Hue gates per colour; sMin/vMin shared; presence = the
+    // per-column fraction a column needs to count toward band/marker.
+    @AppStorage("barHueLo") private var barHueLo: Double = 140      // green
+    @AppStorage("barHueHi") private var barHueHi: Double = 180
+    @AppStorage("markerHueLo") private var markerHueLo: Double = 45 // yellow
+    @AppStorage("markerHueHi") private var markerHueHi: Double = 70
+    @AppStorage("barSMin") private var barSMin: Double = 0.30
+    @AppStorage("barVMin") private var barVMin: Double = 0.45
+    @AppStorage("barPresence") private var barPresence: Double = 0.35
+
+    /// Template grid resolution. 28×28 = 784 cells — ample shape detail, trivial
+    /// to correlate every frame. Template and live region must share this `n`.
+    private let templateN = 28
+
+    // Bot timing config (edited here, read by the FishingBot engine at start()).
+    /// Post-press cooldown so we don't re-read IDLE mid-cast-animation and spam F.
+    /// Borrowed default (1.8s) from a sibling bot — verify against live NTE.
+    @AppStorage("castAnimationSecs") private var castAnimationSecs: Double = 1.8
+    /// Blind F-spam cadence during WAIT (no bite detection — see CLAUDE.md loop).
+    @AppStorage("spamIntervalMs") private var spamIntervalMs: Int = 400
+    /// Give up waiting for a bite after this long and recast (borrowed default).
+    @AppStorage("biteTimeoutSecs") private var biteTimeoutSecs: Double = 45
+    /// Tap-hold JITTER range (ms) for F/Esc — sampled per press. UE5 drops ≤50ms;
+    /// 70–90 is safe. a/d is separate (InputController.dirMinHoldMs), tuned in M3.
+    @AppStorage("holdMinMs") private var holdMinMs: Int = 70
+    @AppStorage("holdMaxMs") private var holdMaxMs: Int = 90
+
+    // M3 minigame control (read by the engine at start()).
+    @AppStorage("invertControl") private var invertControl = false
+    @AppStorage("deadzoneFrac") private var controlDeadzone: Double = 0.5
+    @AppStorage("fineZoneFrac") private var fineZone: Double = 1.3
+    @AppStorage("fineTapMs") private var fineTapMs: Int = 60
+    @AppStorage("controlPollMs") private var controlPollMs: Int = 60
+    @AppStorage("maxStruggleSecs") private var maxStruggleSecs: Double = 120
+    @AppStorage("rewardSettleSecs") private var rewardSettleSecs: Double = 4
+
+    // M4 loop closure — dismiss the loot screen with a centre click (harmless at
+    // idle, unlike esc). Click point is normalized to the game viewport.
+    @AppStorage("clickX") private var clickX: Double = 0.5
+    @AppStorage("clickY") private var clickY: Double = 0.5
+    @AppStorage("postClickMs") private var postClickMs: Int = 100
+
+    /// The persisted jitter range, clamped so min ≤ max.
+    private var tapHoldRange: ClosedRange<UInt64> {
+        let lo = min(holdMinMs, holdMaxMs), hi = max(holdMinMs, holdMaxMs)
+        return UInt64(lo)...UInt64(hi)
+    }
+
     @State private var showRegions = true
     @State private var showContent = true
-    @State private var selectedRegion: RegionID = .fButton
+    @State private var selectedRegion: RegionID = .eButton
+
+    /// Filename of the most recent zone snapshot, shown as confirmation.
+    @State private var lastSnapshot: String?
+
+    /// Short context tag baked into snapshot filenames so a folder of samples is
+    /// self-describing (which source / window mode produced each crop).
+    private var snapshotModeTag: String {
+        mode == .live ? (capturer.isFullscreen ? "live_fs" : "live_win") : "fixture"
+    }
 
     /// Whether regions should use their FULLSCREEN y-offsets (else windowed).
     /// Fixtures behave like windowed.
@@ -47,8 +120,11 @@ struct CalibrationView: View {
     }
 
     // The image + pixel size currently being displayed, depending on mode.
+    // Gated on `isActive`: hidden tab ⇒ nil ⇒ every detection/visualisation
+    // computed below short-circuits, so no big-image work runs off-screen.
     private var displayImage: CGImage? {
-        mode == .live ? capturer.latestFrame : fixtureImage
+        guard isActive else { return nil }
+        return mode == .live ? capturer.latestFrame : fixtureImage
     }
     private var displaySize: CGSize {
         mode == .live ? capturer.pixelSize
@@ -118,6 +194,12 @@ struct CalibrationView: View {
 
                 Divider()
                 regionEditor
+
+                Divider()
+                detection
+
+                Divider()
+                botPanel
 
                 Divider()
                 readouts
@@ -294,6 +376,335 @@ struct CalibrationView: View {
         }
     }
 
+    // MARK: - Detection (M1): IDLE = eButton white-ish fraction over threshold
+
+    private var detection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("Detection — IDLE").font(.subheadline.bold())
+                Spacer()
+                idleBadge
+            }
+            Text("Glyph TEMPLATE match (NCC) — background-independent. Capture E once on a clean IDLE frame; IDLE = E-match over threshold.")
+                .font(.caption2).foregroundStyle(.secondary)
+
+            HStack(spacing: 6) {
+                Button("Capture E") { captureTemplate(.eButton) }
+                Spacer()
+                if !eTemplate.isEmpty {
+                    Button("Clear") { eTemplate = GlyphTemplate() }
+                        .foregroundStyle(.red)
+                }
+            }
+            .font(.caption).controlSize(.small)
+
+            matchRow("E match", id: .eButton, template: eTemplate, decisive: true)
+            HStack {
+                Text("E bright").font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                if let b = eBrightFraction() {
+                    Text(String(format: "%.2f", b))
+                        .font(.caption.monospaced().bold())
+                        .foregroundStyle(b >= idleMinBright ? .green : .orange)
+                }
+            }
+
+            detectionSlider("thresh", $idleMatchThreshold, 0.0...1.0)
+            detectionSlider("minBright", $idleMinBright, 0.0...0.5)
+            Text("IDLE = E-match ≥ thresh AND E-bright ≥ minBright. Raise minBright above the loot-screen's E-bright to stop the dimmed E false-matching IDLE.")
+                .font(.caption2).foregroundStyle(.secondary)
+
+            Divider().padding(.vertical, 2)
+
+            HStack {
+                Text("Detection — MINIGAME").font(.subheadline.bold())
+                Spacer()
+                minigameBadge
+            }
+            Text("1-D read: green target BAND + yellow MARKER, collapsed per column. greenBand present = hooked. error = marker − target → drives a/d (M3).")
+                .font(.caption2).foregroundStyle(.secondary)
+
+            if let r = barReading {
+                barVisualizer(r).frame(height: 38)
+                barReadout(r)
+            } else {
+                Text("—").font(.caption2).foregroundStyle(.secondary)
+            }
+
+            detectionSlider("presence", $barPresence, 0.0...1.0)
+            DisclosureGroup("green / yellow gates") {
+                detectionSlider("g hue lo", $barHueLo, 90...210, step: 1, decimals: 0)
+                detectionSlider("g hue hi", $barHueHi, 90...210, step: 1, decimals: 0)
+                detectionSlider("y hue lo", $markerHueLo, 20...110, step: 1, decimals: 0)
+                detectionSlider("y hue hi", $markerHueHi, 20...110, step: 1, decimals: 0)
+                detectionSlider("sMin", $barSMin, 0.0...1.0)
+                detectionSlider("vMin", $barVMin, 0.0...1.0)
+            }
+            .font(.caption)
+        }
+    }
+
+    /// Numeric band / marker / error readout.
+    private func barReadout(_ r: BarReading) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack {
+                Text("target").font(.caption2).foregroundStyle(.secondary)
+                Spacer()
+                Text(r.targetCenter.map { String(format: "%.2f", $0) } ?? "—")
+                    .font(.caption2.monospaced())
+            }
+            HStack {
+                Text("marker").font(.caption2).foregroundStyle(.secondary)
+                Spacer()
+                Text(r.marker.map { String(format: "%.2f", $0) } ?? "—")
+                    .font(.caption2.monospaced())
+            }
+            HStack {
+                Text("error").font(.caption2).foregroundStyle(.secondary)
+                Spacer()
+                if let e = r.error {
+                    Text(String(format: "%+.2f %@", e, e < 0 ? "→push right" : "→push left"))
+                        .font(.caption2.monospaced())
+                        .foregroundStyle(r.inBand ? .green : .orange)
+                } else {
+                    Text("—").font(.caption2.monospaced())
+                }
+            }
+        }
+    }
+
+    /// Draws the two per-column profiles + the detected band span and marker line
+    /// (shared with the operator view's minigame indicator).
+    private func barVisualizer(_ r: BarReading) -> some View {
+        BarIndicator(reading: r)
+    }
+
+    /// Live MINIGAME / not pill driven by the top-bar green fraction.
+    @ViewBuilder private var minigameBadge: some View {
+        switch isMinigame {
+        case .some(true):
+            Text("MINIGAME").font(.caption2.bold()).padding(.horizontal, 6).padding(.vertical, 2)
+                .background(.green, in: Capsule()).foregroundStyle(.black)
+        case .some(false):
+            Text("no bar").font(.caption2.bold()).padding(.horizontal, 6).padding(.vertical, 2)
+                .background(.gray.opacity(0.3), in: Capsule())
+        case .none:
+            Text("—").font(.caption2).foregroundStyle(.secondary)
+        }
+    }
+
+    /// One live NCC score row. `decisive` ones colour green once over threshold.
+    @ViewBuilder
+    private func matchRow(_ label: String, id: RegionID,
+                          template: GlyphTemplate, decisive: Bool) -> some View {
+        HStack {
+            Text(label).font(.caption).foregroundStyle(.secondary)
+            Spacer()
+            if template.isEmpty {
+                Text("no template").font(.caption2).foregroundStyle(.secondary)
+            } else if let s = matchScore(id, template) {
+                Text(String(format: "%.2f", s))
+                    .font(.caption.monospaced().bold())
+                    .foregroundStyle(decisive && s >= idleMatchThreshold ? .green : .primary)
+            } else {
+                Text("—").font(.caption2).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    /// Live IDLE / not-IDLE pill driven by the eButton white-ish fraction.
+    @ViewBuilder private var idleBadge: some View {
+        switch isIdle {
+        case .some(true):
+            Text("IDLE").font(.caption2.bold()).padding(.horizontal, 6).padding(.vertical, 2)
+                .background(.green, in: Capsule()).foregroundStyle(.black)
+        case .some(false):
+            Text("not idle").font(.caption2.bold()).padding(.horizontal, 6).padding(.vertical, 2)
+                .background(.gray.opacity(0.3), in: Capsule())
+        case .none:
+            Text("—").font(.caption2).foregroundStyle(.secondary)
+        }
+    }
+
+    private func detectionSlider(_ label: String, _ value: Binding<Double>,
+                                 _ range: ClosedRange<Double>,
+                                 step: Double = 0.01, decimals: Int = 2) -> some View {
+        HStack(spacing: 6) {
+            Text(label).font(.caption.monospaced()).frame(width: 44, alignment: .leading)
+            Slider(value: value, in: range)
+            Stepper("", value: value, in: range, step: step).labelsHidden()
+            Text(String(format: "%.\(decimals)f", value.wrappedValue))
+                .font(.caption.monospaced()).frame(width: 36)
+        }
+    }
+
+    // MARK: - Bot controls (thin — drives the shared FishingBot engine)
+
+    private var botPanel: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("Bot").font(.subheadline.bold())
+                Spacer()
+                Circle().fill(bot.state.color).frame(width: 8, height: 8)
+                Text(bot.state.label).font(.caption2).foregroundStyle(.secondary)
+            }
+            Text("Runs the live loop: IDLE → cast → spam F → halt at minigame. Timings below are read at Start.")
+                .font(.caption2).foregroundStyle(.secondary)
+
+            if !InputController.hasAccessibility {
+                HStack(spacing: 6) {
+                    Text("Needs Accessibility to send keys")
+                        .font(.caption2).foregroundStyle(.orange)
+                    Button("Grant") { InputController.requestAccessibility() }
+                        .font(.caption2).controlSize(.small)
+                }
+            }
+
+            HStack {
+                Button(bot.running ? "Stop" : "Start") { bot.toggle() }
+                    .font(.caption).controlSize(.small)
+                    .disabled(!bot.running && eTemplate.isEmpty)
+                Spacer()
+                Button("Focus game") {
+                    bot.input.targetPID = capturer.gamePID
+                    bot.input.focusTarget()
+                }
+                .font(.caption).controlSize(.small)
+                .disabled(capturer.gamePID == nil)
+                Button("Press F once") {
+                    bot.input.targetPID = capturer.gamePID
+                    bot.input.tapHoldMs = tapHoldRange
+                    Task { await bot.input.tap(.f) }
+                }
+                .font(.caption).controlSize(.small)
+                .disabled(capturer.gamePID == nil)
+                Button("Click pt") {
+                    bot.input.targetPID = capturer.gamePID
+                    let p = geometry.globalPoint(normX: clickX, normY: clickY)
+                    Task {
+                        bot.input.focusTarget()
+                        try? await Task.sleep(for: .milliseconds(150))
+                        await bot.input.click(at: p)
+                    }
+                }
+                .font(.caption).controlSize(.small)
+                .disabled(capturer.gamePID == nil || mode != .live)
+            }
+
+            HStack(spacing: 6) {
+                Text("tap hold (jitter)").font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Stepper(value: $holdMinMs, in: 50...150, step: 5) {
+                    Text("\(holdMinMs)").font(.caption.monospaced())
+                }
+                Text("–").font(.caption).foregroundStyle(.secondary)
+                Stepper(value: $holdMaxMs, in: 50...150, step: 5) {
+                    Text("\(holdMaxMs) ms").font(.caption.monospaced())
+                }
+            }
+
+            HStack(spacing: 6) {
+                Text("cast cooldown").font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Stepper(value: $castAnimationSecs, in: 0...6, step: 0.1) {
+                    Text(String(format: "%.1fs", castAnimationSecs))
+                        .font(.caption.monospaced())
+                }
+            }
+
+            HStack(spacing: 6) {
+                Text("spam F every").font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Stepper(value: $spamIntervalMs, in: 150...1000, step: 50) {
+                    Text("\(spamIntervalMs) ms").font(.caption.monospaced())
+                }
+            }
+
+            Divider().padding(.vertical, 2)
+            Text("Minigame control (M3)").font(.caption.bold())
+            Toggle(isOn: $invertControl) {
+                Text("invert a/d (flip if it steers wrong)").font(.caption)
+            }
+            .toggleStyle(.switch).controlSize(.small)
+            Text("Zones are × the band half-width (band size varies per fish): rest ≤ deadzone, tap ≤ fineZone, hold beyond. Tap ms ≥ ~60 to register (game drops shorter).")
+                .font(.caption2).foregroundStyle(.secondary)
+            HStack(spacing: 6) {
+                Text("rest ×band").font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Stepper(value: $controlDeadzone, in: 0...1.5, step: 0.05) {
+                    Text(String(format: "%.2f", controlDeadzone)).font(.caption.monospaced())
+                }
+            }
+            HStack(spacing: 6) {
+                Text("tap ×band").font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Stepper(value: $fineZone, in: 0.5...3, step: 0.1) {
+                    Text(String(format: "%.1f", fineZone)).font(.caption.monospaced())
+                }
+            }
+            HStack(spacing: 6) {
+                Text("fine tap").font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Stepper(value: $fineTapMs, in: 20...150, step: 5) {
+                    Text("\(fineTapMs) ms").font(.caption.monospaced())
+                }
+            }
+            HStack(spacing: 6) {
+                Text("control poll").font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Stepper(value: $controlPollMs, in: 30...200, step: 10) {
+                    Text("\(controlPollMs) ms").font(.caption.monospaced())
+                }
+            }
+            HStack(spacing: 6) {
+                Text("max struggle").font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Stepper(value: $maxStruggleSecs, in: 10...300, step: 10) {
+                    Text("\(Int(maxStruggleSecs))s").font(.caption.monospaced())
+                }
+            }
+            HStack(spacing: 6) {
+                Text("reward settle").font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Stepper(value: $rewardSettleSecs, in: 1...10, step: 0.5) {
+                    Text(String(format: "%.1fs", rewardSettleSecs)).font(.caption.monospaced())
+                }
+            }
+
+            Divider().padding(.vertical, 2)
+            Text("Loop closure — click to dismiss loot (M4)").font(.caption.bold())
+            Text("After the bar vanishes: wait reward-settle (no detection), click this point to close the loot, then after-click pause and resume. Use 'Click pt' to test the spot lands on empty area.")
+                .font(.caption2).foregroundStyle(.secondary)
+            HStack(spacing: 6) {
+                Text("click x").font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Stepper(value: $clickX, in: 0...1, step: 0.02) {
+                    Text(String(format: "%.2f", clickX)).font(.caption.monospaced())
+                }
+            }
+            HStack(spacing: 6) {
+                Text("click y").font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Stepper(value: $clickY, in: 0...1, step: 0.02) {
+                    Text(String(format: "%.2f", clickY)).font(.caption.monospaced())
+                }
+            }
+            HStack(spacing: 6) {
+                Text("after-click wait").font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Stepper(value: $postClickMs, in: 0...1000, step: 50) {
+                    Text("\(postClickMs) ms").font(.caption.monospaced())
+                }
+            }
+
+            Text(bot.status).font(.caption2).foregroundStyle(.secondary)
+            if eTemplate.isEmpty {
+                Text("Capture the E template first.")
+                    .font(.caption2).foregroundStyle(.secondary)
+            }
+        }
+    }
+
     private var readouts: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text("Geometry").font(.subheadline.bold())
@@ -342,6 +753,57 @@ struct CalibrationView: View {
 
     // MARK: - Capture-zone buffers (the exact pixels detection will use)
 
+    /// Live whiteness feature grid for a region (nil if no frame). Used both to
+    /// capture a template and to score the live region against one.
+    private func featureGrid(_ id: RegionID) -> [Double]? {
+        guard let img = displayImage else { return nil }
+        let px = geometry.pixelRect(regions.rect(id, fullscreen: fullscreenLayout))
+        return FrameAnalyzer.featureGrid(of: img, in: px, n: templateN)
+    }
+
+    /// NCC of a region against a captured glyph template (nil if no frame or the
+    /// template is uncaptured).
+    private func matchScore(_ id: RegionID, _ template: GlyphTemplate) -> Double? {
+        guard let grid = featureGrid(id) else { return nil }
+        return template.ncc(grid)
+    }
+
+    /// Live eButton brightness (white-ish fraction) — the IDLE brightness gate.
+    private func eBrightFraction() -> Double? {
+        guard let img = displayImage else { return nil }
+        let px = geometry.pixelRect(regions.rect(.eButton, fullscreen: fullscreenLayout))
+        return FrameAnalyzer.whiteishFraction(of: img, in: px, vMin: 0.6, sMax: 0.4)
+    }
+
+    /// Capture the given region's grid as the E glyph template.
+    private func captureTemplate(_ id: RegionID) {
+        guard let grid = featureGrid(id) else { return }
+        eTemplate = GlyphTemplate(n: templateN, features: grid)
+    }
+
+    /// IDLE decision: eButton matches the captured E glyph above threshold.
+    /// nil when there's no frame or no template yet.
+    private var isIdle: Bool? {
+        matchScore(.eButton, eTemplate).map { $0 >= idleMatchThreshold }
+    }
+
+    /// Live 1-D read of the minigame top bar (green band + yellow marker).
+    private var barReading: BarReading? {
+        guard let img = displayImage else { return nil }
+        let px = geometry.pixelRect(regions.rect(.topBar, fullscreen: fullscreenLayout))
+        let green = min(barHueLo, barHueHi)...max(barHueLo, barHueHi)
+        let yellow = min(markerHueLo, markerHueHi)...max(markerHueLo, markerHueHi)
+        return BarReader.read(of: img, in: px, greenHue: green, yellowHue: yellow,
+                              sMin: barSMin, vMin: barVMin, presence: barPresence)
+    }
+
+    /// MINIGAME decision: a coherent green target band is present in the top bar
+    /// — i.e. we hooked the fish and the control minigame has started.
+    private var isMinigame: Bool? {
+        guard displayImage != nil else { return nil }
+        return barReading?.greenBand != nil
+    }
+
     /// Crop the current frame to a region's pixel rect (clamped to the image).
     private func regionCrop(_ id: RegionID) -> CGImage? {
         guard let img = displayImage else { return nil }
@@ -357,6 +819,17 @@ struct CalibrationView: View {
             Text("Capture zones").font(.headline)
             Text("Exact pixels fed to detection")
                 .font(.caption2).foregroundStyle(.secondary)
+            HStack(spacing: 6) {
+                Button { ZoneSnapshot.revealFolder() } label: {
+                    Label("Folder", systemImage: "folder").font(.caption2)
+                }
+                .controlSize(.small)
+                if let lastSnapshot {
+                    Text("saved \(lastSnapshot)")
+                        .font(.caption2).foregroundStyle(.green)
+                        .lineLimit(1).truncationMode(.middle)
+                }
+            }
             ScrollView {
                 VStack(alignment: .leading, spacing: 10) {
                     ForEach(regions.labelled(fullscreen: fullscreenLayout), id: \.id) { item in
@@ -377,6 +850,18 @@ struct CalibrationView: View {
                                     .resizable().interpolation(.none).scaledToFit()
                                     .frame(maxWidth: .infinity, maxHeight: 64, alignment: .center)
                                     .background(Color.black)
+                                // Freeze THIS zone's exact buffer to a PNG. New file
+                                // every click (timestamped) — accumulates samples.
+                                Button {
+                                    if let url = ZoneSnapshot.save(c, zone: item.id.rawValue,
+                                                                   mode: snapshotModeTag) {
+                                        lastSnapshot = url.lastPathComponent
+                                    }
+                                } label: {
+                                    Label("Snapshot", systemImage: "camera").font(.caption2)
+                                        .frame(maxWidth: .infinity)
+                                }
+                                .controlSize(.small)
                             } else {
                                 Text("no frame").font(.caption2).foregroundStyle(.secondary)
                             }
@@ -451,5 +936,6 @@ struct CalibrationView: View {
 }
 
 #Preview {
-    CalibrationView().frame(width: 1100, height: 760)
+    let bot = FishingBot()
+    return CalibrationView(bot: bot, capturer: bot.capturer).frame(width: 1100, height: 760)
 }
