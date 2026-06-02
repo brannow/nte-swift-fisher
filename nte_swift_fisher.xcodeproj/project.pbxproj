@@ -30,11 +30,20 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		5F6107302FCF61DC0083DD9D /* Recovered References */ = {
+			isa = PBXGroup;
+			children = (
+				5FA1C0F160000000DEADBEEF /* Local.xcconfig */,
+			);
+			name = "Recovered References";
+			sourceTree = "<group>";
+		};
 		5F903CD82FCD695A00334354 = {
 			isa = PBXGroup;
 			children = (
 				5F903CE32FCD695A00334354 /* nte_swift_fisher */,
 				5F903CE22FCD695A00334354 /* Products */,
+				5F6107302FCF61DC0083DD9D /* Recovered References */,
 			);
 			sourceTree = "<group>";
 		};

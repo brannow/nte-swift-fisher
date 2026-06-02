@@ -33,7 +33,7 @@ struct CalibrationView: View {
     @State private var fixtureImage: CGImage?
 
     // Persisted so calibration survives relaunches.
-    @AppStorage("windowedTitleBarPoints") private var windowedTitleBarPoints: Double = 32
+    @AppStorage("windowedTitleBarPoints") private var windowedTitleBarPoints: Double = BotDefaults.titleBarPoints
     @AppStorage("gameRegions") private var regions = GameRegions()
     /// Per-fixture content-rect insets (fractions) — each screenshot keeps its
     /// own set since cropToWindow heuristics differ per capture (windowed title
@@ -44,22 +44,22 @@ struct CalibrationView: View {
     // the E/F glyphs once, then IDLE = eButton NCC score over threshold. Templates
     // + threshold persist across relaunches.
     @AppStorage("eTemplate") private var eTemplate = GlyphTemplate()
-    @AppStorage("idleMatchThreshold") private var idleMatchThreshold: Double = 0.55
+    @AppStorage("idleMatchThreshold") private var idleMatchThreshold: Double = BotDefaults.idleThreshold
     /// Min eButton brightness to count as IDLE — rejects the dimmed E behind the
     /// loot overlay (NCC alone matches the blurred glyph). 0 = gate off.
-    @AppStorage("idleMinBright") private var idleMinBright: Double = 0
+    @AppStorage("idleMinBright") private var idleMinBright: Double = BotDefaults.idleMinBright
 
     // Detection (M3) — MINIGAME bar read as a 1-D signal: green TARGET band +
     // yellow MARKER. greenBand present ⇒ minigame active ⇒ also the "we hooked it"
     // signal for spam-F. Hue gates per colour; sMin/vMin shared; presence = the
     // per-column fraction a column needs to count toward band/marker.
-    @AppStorage("barHueLo") private var barHueLo: Double = 140      // green
-    @AppStorage("barHueHi") private var barHueHi: Double = 180
-    @AppStorage("markerHueLo") private var markerHueLo: Double = 45 // yellow
-    @AppStorage("markerHueHi") private var markerHueHi: Double = 70
-    @AppStorage("barSMin") private var barSMin: Double = 0.30
-    @AppStorage("barVMin") private var barVMin: Double = 0.45
-    @AppStorage("barPresence") private var barPresence: Double = 0.35
+    @AppStorage("barHueLo") private var barHueLo: Double = BotDefaults.barHueLo      // green
+    @AppStorage("barHueHi") private var barHueHi: Double = BotDefaults.barHueHi
+    @AppStorage("markerHueLo") private var markerHueLo: Double = BotDefaults.markerHueLo // yellow
+    @AppStorage("markerHueHi") private var markerHueHi: Double = BotDefaults.markerHueHi
+    @AppStorage("barSMin") private var barSMin: Double = BotDefaults.barSMin
+    @AppStorage("barVMin") private var barVMin: Double = BotDefaults.barVMin
+    @AppStorage("barPresence") private var barPresence: Double = BotDefaults.barPresence
 
     /// Template grid resolution. 28×28 = 784 cells — ample shape detail, trivial
     /// to correlate every frame. Template and live region must share this `n`.
@@ -68,33 +68,33 @@ struct CalibrationView: View {
     // Bot timing config (edited here, read by the FishingBot engine at start()).
     /// Post-press cooldown so we don't re-read IDLE mid-cast-animation and spam F.
     /// Borrowed default (1.8s) from a sibling bot — verify against live NTE.
-    @AppStorage("castAnimationSecs") private var castAnimationSecs: Double = 1.8
+    @AppStorage("castAnimationSecs") private var castAnimationSecs: Double = BotDefaults.castSecs
     /// Blind F-spam cadence during WAIT (no bite detection — see CLAUDE.md loop).
-    @AppStorage("spamIntervalMs") private var spamIntervalMs: Int = 400
+    @AppStorage("spamIntervalMs") private var spamIntervalMs: Int = BotDefaults.spamMs
     /// Give up waiting for a bite after this long and recast (borrowed default).
-    @AppStorage("biteTimeoutSecs") private var biteTimeoutSecs: Double = 45
+    @AppStorage("biteTimeoutSecs") private var biteTimeoutSecs: Double = BotDefaults.biteTimeoutSecs
     /// Tap-hold JITTER range (ms) for F/Esc — sampled per press. UE5 drops ≤50ms;
     /// 70–90 is safe. a/d control is separate: deterministic + non-blocking.
-    @AppStorage("holdMinMs") private var holdMinMs: Int = 70
-    @AppStorage("holdMaxMs") private var holdMaxMs: Int = 90
+    @AppStorage("holdMinMs") private var holdMinMs: Int = BotDefaults.holdMinMs
+    @AppStorage("holdMaxMs") private var holdMaxMs: Int = BotDefaults.holdMaxMs
 
     // M3 minigame control (read by the engine at start()).
-    @AppStorage("invertControl") private var invertControl = false
-    @AppStorage("deadzoneFrac") private var controlDeadzone: Double = 0.5
-    @AppStorage("lookaheadSecs") private var lookaheadSecs: Double = 0.12
-    @AppStorage("velAlpha") private var velAlpha: Double = 0.5
-    @AppStorage("controlPollMs") private var controlPollMs: Int = 33
+    @AppStorage("invertControl") private var invertControl = BotDefaults.invertControl
+    @AppStorage("deadzoneFrac") private var controlDeadzone: Double = BotDefaults.deadzone
+    @AppStorage("lookaheadSecs") private var lookaheadSecs: Double = BotDefaults.lookaheadSecs
+    @AppStorage("velAlpha") private var velAlpha: Double = BotDefaults.velAlpha
+    @AppStorage("controlPollMs") private var controlPollMs: Int = BotDefaults.controlPollMs
     /// Per-tick minigame debug log (dt / read-time / marker / band / error). Live —
     /// read each control tick, so it can be flipped while the bot runs.
-    @AppStorage("debugControlLog") private var debugControlLog = false
-    @AppStorage("maxStruggleSecs") private var maxStruggleSecs: Double = 120
-    @AppStorage("rewardSettleSecs") private var rewardSettleSecs: Double = 4
+    @AppStorage("debugControlLog") private var debugControlLog = BotDefaults.debugControlLog
+    @AppStorage("maxStruggleSecs") private var maxStruggleSecs: Double = BotDefaults.maxStruggleSecs
+    @AppStorage("rewardSettleSecs") private var rewardSettleSecs: Double = BotDefaults.rewardSettleSecs
 
     // M4 loop closure — dismiss the loot screen with a centre click (harmless at
     // idle, unlike esc). Click point is normalized to the game viewport.
-    @AppStorage("clickX") private var clickX: Double = 0.5
-    @AppStorage("clickY") private var clickY: Double = 0.5
-    @AppStorage("postClickMs") private var postClickMs: Int = 100
+    @AppStorage("clickX") private var clickX: Double = BotDefaults.clickX
+    @AppStorage("clickY") private var clickY: Double = BotDefaults.clickY
+    @AppStorage("postClickMs") private var postClickMs: Int = BotDefaults.postClickMs
 
     /// The persisted jitter range, clamped so min ≤ max.
     private var tapHoldRange: ClosedRange<UInt64> {
@@ -152,6 +152,52 @@ struct CalibrationView: View {
                               contentInsets: insets)
     }
 
+    // MARK: - Per-section reset to defaults
+
+    /// Small "Reset" control for a section header. Restores just that section's
+    /// settings to BotDefaults (the same source the engine reads), so a reset can
+    /// never disagree with what the bot actually runs with.
+    private func resetButton(_ action: @escaping () -> Void) -> some View {
+        Button("Reset", action: action)
+            .font(.caption2)
+            .buttonStyle(.borderless)
+            .help("Reset this section to defaults")
+    }
+
+    private func resetContentRect() {
+        windowedTitleBarPoints = BotDefaults.titleBarPoints
+    }
+    private func resetIdleDetection() {
+        idleMatchThreshold = BotDefaults.idleThreshold
+        idleMinBright = BotDefaults.idleMinBright
+    }
+    private func resetMinigameDetection() {
+        barPresence = BotDefaults.barPresence
+        barHueLo = BotDefaults.barHueLo; barHueHi = BotDefaults.barHueHi
+        markerHueLo = BotDefaults.markerHueLo; markerHueHi = BotDefaults.markerHueHi
+        barSMin = BotDefaults.barSMin; barVMin = BotDefaults.barVMin
+    }
+    private func resetTiming() {
+        holdMinMs = BotDefaults.holdMinMs; holdMaxMs = BotDefaults.holdMaxMs
+        castAnimationSecs = BotDefaults.castSecs
+        spamIntervalMs = BotDefaults.spamMs
+        biteTimeoutSecs = BotDefaults.biteTimeoutSecs
+    }
+    private func resetMinigameControl() {
+        invertControl = BotDefaults.invertControl
+        controlDeadzone = BotDefaults.deadzone
+        lookaheadSecs = BotDefaults.lookaheadSecs
+        velAlpha = BotDefaults.velAlpha
+        controlPollMs = BotDefaults.controlPollMs
+        debugControlLog = BotDefaults.debugControlLog
+        maxStruggleSecs = BotDefaults.maxStruggleSecs
+        rewardSettleSecs = BotDefaults.rewardSettleSecs
+    }
+    private func resetLoopClosure() {
+        clickX = BotDefaults.clickX; clickY = BotDefaults.clickY
+        postClickMs = BotDefaults.postClickMs
+    }
+
     var body: some View {
         HStack(spacing: 0) {
             controls
@@ -176,7 +222,7 @@ struct CalibrationView: View {
     private var controls: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
-                Text("NTE Fisher — M0 Calibration")
+                Text("NTE Fisher Calibration")
                     .font(.headline)
 
                 Picker("Source", selection: $mode) {
@@ -266,7 +312,11 @@ struct CalibrationView: View {
     private var titleBarSlider: some View {
         let windowedActive = mode == .live && !capturer.isFullscreen
         return VStack(alignment: .leading, spacing: 6) {
-            Text("Content rect").font(.subheadline.bold())
+            HStack {
+                Text("Content rect").font(.subheadline.bold())
+                Spacer()
+                resetButton(resetContentRect)
+            }
             Text("Title bar = windowed viewport crop. Fullscreen & fixtures = 0. Per-mode y nudges live per region below.")
                 .font(.caption2).foregroundStyle(.secondary)
             HStack {
@@ -387,11 +437,12 @@ struct CalibrationView: View {
     private var detection: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
-                Text("Detection — IDLE").font(.subheadline.bold())
+                Text("Detection: IDLE").font(.subheadline.bold())
                 Spacer()
+                resetButton(resetIdleDetection)
                 idleBadge
             }
-            Text("Glyph TEMPLATE match (NCC) — background-independent. Capture E once on a clean IDLE frame; IDLE = E-match over threshold.")
+            Text("Glyph TEMPLATE match (NCC), background-independent. Capture E once on a clean IDLE frame; IDLE = E-match over threshold.")
                 .font(.caption2).foregroundStyle(.secondary)
 
             HStack(spacing: 6) {
@@ -423,8 +474,9 @@ struct CalibrationView: View {
             Divider().padding(.vertical, 2)
 
             HStack {
-                Text("Detection — MINIGAME").font(.subheadline.bold())
+                Text("Detection: MINIGAME").font(.subheadline.bold())
                 Spacer()
+                resetButton(resetMinigameDetection)
                 minigameBadge
             }
             Text("1-D read: green target BAND + yellow MARKER, collapsed per column. greenBand present = hooked. error = marker − target → drives a/d (M3).")
@@ -597,6 +649,12 @@ struct CalibrationView: View {
                 .disabled(capturer.gamePID == nil || mode != .live)
             }
 
+            Divider().padding(.vertical, 2)
+            HStack {
+                Text("Cast / wait timing").font(.caption.bold())
+                Spacer()
+                resetButton(resetTiming)
+            }
             HStack(spacing: 6) {
                 Text("tap hold (jitter)").font(.caption).foregroundStyle(.secondary)
                 Spacer()
@@ -627,7 +685,11 @@ struct CalibrationView: View {
             }
 
             Divider().padding(.vertical, 2)
-            Text("Minigame control (M3)").font(.caption.bold())
+            HStack {
+                Text("Minigame control (M3)").font(.caption.bold())
+                Spacer()
+                resetButton(resetMinigameControl)
+            }
             Toggle(isOn: $invertControl) {
                 Text("invert a/d (flip if it steers wrong)").font(.caption)
             }
@@ -682,7 +744,11 @@ struct CalibrationView: View {
             }
 
             Divider().padding(.vertical, 2)
-            Text("Loop closure — click to dismiss loot (M4)").font(.caption.bold())
+            HStack {
+                Text("Loop closure: dismiss loot (M4)").font(.caption.bold())
+                Spacer()
+                resetButton(resetLoopClosure)
+            }
             Text("After the bar vanishes: wait reward-settle (no detection), click this point to close the loot, then after-click pause and resume. Use 'Click pt' to test the spot lands on empty area.")
                 .font(.caption2).foregroundStyle(.secondary)
             HStack(spacing: 6) {

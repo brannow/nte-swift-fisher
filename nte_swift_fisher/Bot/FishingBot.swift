@@ -348,34 +348,36 @@ struct Config {
         func dbl(_ k: String, _ def: Double) -> Double { d.object(forKey: k) as? Double ?? def }
         func int(_ k: String, _ def: Int) -> Int { d.object(forKey: k) as? Int ?? def }
 
+        // Defaults come from BotDefaults so the engine and the Config window's
+        // editors / reset buttons share one source (no drift).
         let regions = d.string(forKey: "gameRegions").flatMap(GameRegions.init(rawValue:)) ?? GameRegions()
-        let gLo = dbl("barHueLo", 140), gHi = dbl("barHueHi", 180)
-        let yLo = dbl("markerHueLo", 45), yHi = dbl("markerHueHi", 70)
-        let hMin = int("holdMinMs", 70), hMax = int("holdMaxMs", 90)
+        let gLo = dbl("barHueLo", BotDefaults.barHueLo), gHi = dbl("barHueHi", BotDefaults.barHueHi)
+        let yLo = dbl("markerHueLo", BotDefaults.markerHueLo), yHi = dbl("markerHueHi", BotDefaults.markerHueHi)
+        let hMin = int("holdMinMs", BotDefaults.holdMinMs), hMax = int("holdMaxMs", BotDefaults.holdMaxMs)
 
         return Config(
             regions: regions,
-            titleBarPoints: dbl("windowedTitleBarPoints", 32),
+            titleBarPoints: dbl("windowedTitleBarPoints", BotDefaults.titleBarPoints),
             eTemplate: loadTemplate(),
-            idleThreshold: dbl("idleMatchThreshold", 0.55),
-            idleMinBright: dbl("idleMinBright", 0),
+            idleThreshold: dbl("idleMatchThreshold", BotDefaults.idleThreshold),
+            idleMinBright: dbl("idleMinBright", BotDefaults.idleMinBright),
             greenHue: Swift.min(gLo, gHi)...Swift.max(gLo, gHi),
             yellowHue: Swift.min(yLo, yHi)...Swift.max(yLo, yHi),
-            sMin: dbl("barSMin", 0.30), vMin: dbl("barVMin", 0.45),
-            presence: dbl("barPresence", 0.35),
-            castSecs: dbl("castAnimationSecs", 1.8),
-            spamMs: int("spamIntervalMs", 400),
-            biteTimeoutSecs: dbl("biteTimeoutSecs", 45),
+            sMin: dbl("barSMin", BotDefaults.barSMin), vMin: dbl("barVMin", BotDefaults.barVMin),
+            presence: dbl("barPresence", BotDefaults.barPresence),
+            castSecs: dbl("castAnimationSecs", BotDefaults.castSecs),
+            spamMs: int("spamIntervalMs", BotDefaults.spamMs),
+            biteTimeoutSecs: dbl("biteTimeoutSecs", BotDefaults.biteTimeoutSecs),
             holdRange: UInt64(Swift.min(hMin, hMax))...UInt64(Swift.max(hMin, hMax)),
-            controlPollMs: int("controlPollMs", 33),
-            deadzone: dbl("deadzoneFrac", 0.5),     // × half-band
-            lookaheadSecs: dbl("lookaheadSecs", 0.15),   // ≈ measured input dead time
-            velAlpha: dbl("velAlpha", 0.5),
-            invertControl: d.bool(forKey: "invertControl"),
-            maxStruggleSecs: dbl("maxStruggleSecs", 120),
-            rewardSettleSecs: dbl("rewardSettleSecs", 4),
-            clickX: dbl("clickX", 0.5),
-            clickY: dbl("clickY", 0.5),
-            postClickMs: int("postClickMs", 100))
+            controlPollMs: int("controlPollMs", BotDefaults.controlPollMs),
+            deadzone: dbl("deadzoneFrac", BotDefaults.deadzone),     // × half-band
+            lookaheadSecs: dbl("lookaheadSecs", BotDefaults.lookaheadSecs),   // ≈ measured input dead time
+            velAlpha: dbl("velAlpha", BotDefaults.velAlpha),
+            invertControl: (d.object(forKey: "invertControl") as? Bool) ?? BotDefaults.invertControl,
+            maxStruggleSecs: dbl("maxStruggleSecs", BotDefaults.maxStruggleSecs),
+            rewardSettleSecs: dbl("rewardSettleSecs", BotDefaults.rewardSettleSecs),
+            clickX: dbl("clickX", BotDefaults.clickX),
+            clickY: dbl("clickY", BotDefaults.clickY),
+            postClickMs: int("postClickMs", BotDefaults.postClickMs))
     }
 }
