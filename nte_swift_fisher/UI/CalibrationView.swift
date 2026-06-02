@@ -18,11 +18,14 @@ enum CaptureMode: String, CaseIterable, Identifiable {
 }
 
 struct CalibrationView: View {
-    /// Shared orchestrator + capture stream (owned by ContentView).
+    /// Shared orchestrator + capture stream (owned by the app, shared with the
+    /// operator window).
     @ObservedObject var bot: FishingBot
     @ObservedObject var capturer: ScreenCapturer
-    /// True only while this tab is the visible one. When false we skip ALL the
-    /// heavy per-frame detection/visualisation (single choke point: displayImage).
+    /// True while the Config window is on screen. When false we skip ALL the heavy
+    /// per-frame detection/visualisation (single choke point: displayImage). The
+    /// window is torn down when closed, so this is effectively always true while
+    /// the view exists — kept as a guard + for previews.
     var isActive: Bool = true
 
     @State private var mode: CaptureMode = .fixture

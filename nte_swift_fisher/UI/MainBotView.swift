@@ -4,7 +4,8 @@
 //
 //  The operator view: dead simple. A state indicator, a live minigame indicator,
 //  one Start/Stop button (Start auto-focuses the game), and a status line. All
-//  tuning lives in the Config tab — this screen is for running it.
+//  tuning lives in the separate Config window (toolbar button) — this screen is
+//  for running it.
 //
 
 import SwiftUI
@@ -12,6 +13,7 @@ import SwiftUI
 struct MainBotView: View {
     @ObservedObject var bot: FishingBot
     @ObservedObject var capturer: ScreenCapturer
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         VStack(spacing: 24) {
@@ -41,6 +43,16 @@ struct MainBotView: View {
         }
         .padding(40)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    openWindow(id: ConfigWindow.id)
+                } label: {
+                    Label("Config", systemImage: "slider.horizontal.3")
+                }
+                .help("Open calibration & tuning")
+            }
+        }
     }
 
     // MARK: - State indicator
@@ -118,8 +130,12 @@ struct MainBotView: View {
             }
         }
         if !bot.isConfigured {
-            Text("Capture the E template in the Config tab before starting.")
-                .font(.caption).foregroundStyle(.orange)
+            HStack(spacing: 6) {
+                Text("Capture the E template before starting.")
+                    .font(.caption).foregroundStyle(.orange)
+                Button("Open Config") { openWindow(id: ConfigWindow.id) }
+                    .controlSize(.small)
+            }
         }
     }
 }
