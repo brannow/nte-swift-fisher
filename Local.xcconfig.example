@@ -1,0 +1,10 @@
+// Copy this file to `Local.xcconfig` (which is gitignored) and set your own
+// Apple Developer Team ID for local code signing:
+//
+//     cp Local.xcconfig.example Local.xcconfig
+//
+// Find your Team ID in Xcode > Settings > Accounts, or the Apple Developer
+// portal. Without it the app falls back to ad-hoc "Sign to Run Locally", which
+// can make macOS drop Accessibility / Screen Recording permissions on rebuild
+// (both are required for the bot to work).
+DEVELOPMENT_TEAM = YOUR_TEAM_ID

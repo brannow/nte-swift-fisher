@@ -3,11 +3,14 @@
 .AppleDouble
 .LSOverride
 
-# Xcode — user-specific
+# Xcode user-specific
 xcuserdata/
 *.xcworkspace/xcuserdata/
 *.xcuserstate
 *.xcscmblueprint
+
+# Local signing (Team ID) - copy Local.xcconfig.example to Local.xcconfig
+Local.xcconfig
 
 # Build artifacts
 DerivedData/

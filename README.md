@@ -53,6 +53,18 @@ xcodebuild -project nte_swift_fisher.xcodeproj \
 
 Or just open the project in Xcode and hit Run.
 
+### Signing (local)
+
+The Apple Team ID is kept out of the repo. For stable local signing (which keeps
+macOS from dropping the app's permissions on rebuild), copy the template and set
+your own Team ID:
+
+```sh
+cp Local.xcconfig.example Local.xcconfig   # then edit in your Team ID
+```
+
+`Local.xcconfig` is gitignored. Without it the app still builds, just ad-hoc signed.
+
 ## First-time setup
 
 1. Grant **Screen Recording** and **Accessibility** (System Settings, Privacy and
