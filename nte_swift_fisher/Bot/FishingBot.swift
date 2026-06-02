@@ -361,7 +361,7 @@ struct Config {
             holdRange: UInt64(Swift.min(hMin, hMax))...UInt64(Swift.max(hMin, hMax)),
             controlPollMs: int("controlPollMs", 33),
             deadzone: dbl("deadzoneFrac", 0.5),     // × half-band
-            lookaheadSecs: dbl("lookaheadSecs", 0.12),
+            lookaheadSecs: dbl("lookaheadSecs", 0.15),   // ≈ measured input dead time
             velAlpha: dbl("velAlpha", 0.5),
             invertControl: d.bool(forKey: "invertControl"),
             maxStruggleSecs: dbl("maxStruggleSecs", 120),
