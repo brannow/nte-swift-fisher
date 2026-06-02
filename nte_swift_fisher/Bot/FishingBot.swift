@@ -186,7 +186,12 @@ final class FishingBot: ObservableObject {
                 guard let f = capturer.latestFrame, let g = geometry(cfg) else {
                     try? await Task.sleep(for: .milliseconds(UInt64(cfg.controlPollMs))); continue
                 }
+                // Live debug switch (read each tick so it can be flipped mid-run from
+                // the Config window) — gates the noisy per-tick log + its overhead.
+                let debug = UserDefaults.standard.bool(forKey: "debugControlLog")
+                let readStart = debug ? Date() : nil
                 let r = readBar(cfg, f, g)
+                let readMs = readStart.map { Date().timeIntervalSince($0) * 1000 } ?? 0
                 reading = r
 
                 if Date().timeIntervalSince(mgStart) > cfg.maxStruggleSecs {
@@ -218,10 +223,13 @@ final class FishingBot: ObservableObject {
 
                 let act = d.direction.map { $0 == .right ? "D" : "A" } ?? "rest"
                 status = String(format: "minigame: %@ (e%+.3f v%+.2f)", act, d.error, d.velocity)
-                // Per-tick instrumentation: with these we can identify the marker
-                // plant + true loop latency from a few rounds, and tune lookahead.
-                Log.msg(String(format: "🎯 dt=%4.0fms m=%.3f c=%.3f v=%+.3f pc=%.3f e=%+.3f → %@",
-                               d.dtMs, d.marker, d.center, d.velocity, d.predicted, d.error, act))
+                // Per-tick instrumentation (debug only): plant ID + loop latency, and
+                // `rd=` times the bar read so we can confirm where each ~70ms tick goes
+                // before trimming detection resolution. Off = no print/format overhead.
+                if debug {
+                    Log.msg(String(format: "🎯 dt=%4.0fms rd=%4.1fms m=%.3f c=%.3f v=%+.3f pc=%.3f e=%+.3f → %@",
+                                   d.dtMs, readMs, d.marker, d.center, d.velocity, d.predicted, d.error, act))
+                }
                 try? await Task.sleep(for: .milliseconds(UInt64(cfg.controlPollMs)))
             }
             input.releaseAll()

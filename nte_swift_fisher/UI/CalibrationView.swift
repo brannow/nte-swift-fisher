@@ -84,6 +84,9 @@ struct CalibrationView: View {
     @AppStorage("lookaheadSecs") private var lookaheadSecs: Double = 0.12
     @AppStorage("velAlpha") private var velAlpha: Double = 0.5
     @AppStorage("controlPollMs") private var controlPollMs: Int = 33
+    /// Per-tick minigame debug log (dt / read-time / marker / band / error). Live —
+    /// read each control tick, so it can be flipped while the bot runs.
+    @AppStorage("debugControlLog") private var debugControlLog = false
     @AppStorage("maxStruggleSecs") private var maxStruggleSecs: Double = 120
     @AppStorage("rewardSettleSecs") private var rewardSettleSecs: Double = 4
 
@@ -659,6 +662,10 @@ struct CalibrationView: View {
                     Text("\(controlPollMs) ms").font(.caption.monospaced())
                 }
             }
+            Toggle(isOn: $debugControlLog) {
+                Text("debug log (per-tick dt / read-time / error to console)").font(.caption)
+            }
+            .toggleStyle(.switch).controlSize(.small)
             HStack(spacing: 6) {
                 Text("max struggle").font(.caption).foregroundStyle(.secondary)
                 Spacer()
