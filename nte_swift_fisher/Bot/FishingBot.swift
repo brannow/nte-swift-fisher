@@ -60,6 +60,11 @@ final class FishingBot: ObservableObject {
     @Published private(set) var status = "stopped"
     /// Latest minigame bar read, for the live indicator (nil outside the bar).
     @Published private(set) var reading: BarReading?
+    /// Live control-loop frequency (Hz), EMA-smoothed, updated each minigame tick.
+    /// Health gauge: should sit near 1000/controlPollMs (~30Hz). If it sags over a
+    /// session it points at MainActor back-pressure (e.g. console-pipe stalls from
+    /// heavy logging), not the tracker. 0 = no control loop running right now.
+    @Published private(set) var controlHz: Double = 0
     /// Casts made this session (each lure-out). Resets on start.
     @Published private(set) var casts = 0
     /// Self-stop after this many casts (0 = unlimited). Live-editable (even mid-
@@ -70,6 +75,13 @@ final class FishingBot: ObservableObject {
 
     private var task: Task<Void, Never>?
     private let pollMs: UInt64 = 250
+    /// App Nap / timer-coalescing assertion, held only while a run is active.
+    /// We fish with the GAME frontmost, so our app is a background process and a
+    /// prime App Nap target — and App Nap coalesces the timers behind `Task.sleep`,
+    /// which silently stretches the control loop's poll (seen live as ~1/10
+    /// launches stuck near half rate). `.latencyCritical` disables that coalescing;
+    /// `.userInitiated` blocks the nap. Scoped to a run, so idle costs nothing.
+    private var activity: NSObjectProtocol?
 
     init() {
         capturer = ScreenCapturer()
@@ -86,6 +98,9 @@ final class FishingBot: ObservableObject {
     func start() {
         guard !running else { return }
         Log.msg("▶️ bot start")
+        activity = ProcessInfo.processInfo.beginActivity(
+            options: [.userInitiated, .latencyCritical],
+            reason: "fishing control loop")
         running = true
         casts = 0
         state = .seekingIdle
@@ -101,10 +116,12 @@ final class FishingBot: ObservableObject {
         running = false
         task?.cancel()
         task = nil
+        if let a = activity { ProcessInfo.processInfo.endActivity(a); activity = nil }
         input.releaseAll()
         state = .stopped
         status = "stopped"
         reading = nil
+        controlHz = 0
     }
 
     func toggle() { running ? stop() : start() }
@@ -118,6 +135,10 @@ final class FishingBot: ObservableObject {
         input.tapHoldMs = cfg.holdRange
         input.focusTarget()
         await loop(cfg)
+        // The loop can end without stop() (e.g. the cast-limit self-stop), so
+        // release the App Nap assertion here too — endActivity is safe to skip if
+        // stop() already cleared it.
+        if let a = activity { ProcessInfo.processInfo.endActivity(a); activity = nil }
     }
 
     private func loop(_ cfg: Config) async {
@@ -221,6 +242,12 @@ final class FishingBot: ObservableObject {
                                      halfBand: hb, tuning: tuning)
                 input.setDirection(d.direction)
 
+                // Live loop-rate gauge (EMA). dt is 0 on the first tick — skip it.
+                if d.dtMs > 0 {
+                    let inst = 1000.0 / d.dtMs
+                    controlHz = controlHz == 0 ? inst : controlHz * 0.8 + inst * 0.2
+                }
+
                 let act = d.direction.map { $0 == .right ? "D" : "A" } ?? "rest"
                 status = String(format: "minigame: %@ (e%+.3f v%+.2f)", act, d.error, d.velocity)
                 // Per-tick instrumentation (debug only): plant ID + loop latency, and
@@ -233,6 +260,7 @@ final class FishingBot: ObservableObject {
                 try? await Task.sleep(for: .milliseconds(UInt64(cfg.controlPollMs)))
             }
             input.releaseAll()
+            controlHz = 0
             if !running || Task.isCancelled { break }
 
             // 4) Bar gone — WIN or FAIL. Do NOT run idle detection during the

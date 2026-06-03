@@ -44,7 +44,7 @@ enum BotDefaults {
     static let controlPollMs = 33
     static let debugControlLog = false
     static let maxStruggleSecs = 120.0
-    static let rewardSettleSecs = 4.0
+    static let rewardSettleSecs = 5.0
 
     // Loop closure (M4)
     static let clickX = 0.5

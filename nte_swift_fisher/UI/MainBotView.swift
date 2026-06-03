@@ -100,6 +100,30 @@ struct MainBotView: View {
             } else {
                 Text(" ").font(.caption2.monospaced())
             }
+            loopRate
+        }
+    }
+
+    // MARK: - Control-loop rate gauge
+    //
+    // Live Hz of the minigame control loop. Should sit near 30Hz; a steady sag
+    // over a session is the tell-tale of MainActor back-pressure (e.g. console
+    // logging stalls), NOT a tracker problem. Only shown while the loop runs.
+    @ViewBuilder private var loopRate: some View {
+        if bot.controlHz > 0 {
+            Text(String(format: "control loop %.1f Hz", bot.controlHz))
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(loopRateColor)
+        } else {
+            Text(" ").font(.caption2.monospaced())
+        }
+    }
+
+    private var loopRateColor: Color {
+        switch bot.controlHz {
+        case 22...:   return .green   // healthy (target ~30Hz)
+        case 12..<22: return .yellow  // degrading
+        default:      return .red     // crawling
         }
     }
 
